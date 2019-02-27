@@ -93,17 +93,6 @@ int is_empty(list *L) {
   return (L == NULL) || (*L == NULL);
 }
 
-void list_print(list L) { 
-  if (L == NULL) {	
-     printf("lista vuota, nessun elemento da stampare");
-  }
-  while(L != NULL) {
-    printf("%s ",L->p.payload);
-    L = L->next;
-  }
-  printf("\n");
-}
-
 struct node* node_alloc(struct pkt e) {
 	struct node *tmp = (struct node *)malloc(sizeof(struct node));
 	if(tmp != NULL) {
@@ -167,6 +156,17 @@ int tail_insert(list *L, struct pkt e) {
 	}
 }
 
+void list_print(list L) { 
+  if (L == NULL) {	
+     printf("Empty list\n");
+  }
+  while(L != NULL) {
+    printf("%s ",L->p.payload);
+    L = L->next;
+  }
+  printf("\n");
+}
+
 int generate_checksum(struct pkt packet){
     int i;
     int sum = (packet.seqnum + packet.acknum);
@@ -191,7 +191,6 @@ A_output (message)
 	strcpy(packet.payload, message.data);
 	if(state_A) {
 		tail_insert(&L, packet);
-		list_print(L);
 	} else {
 		packet.seqnum = seq_num;
 		packet.acknum = ack;
