@@ -7,6 +7,7 @@
 #include <sys/file.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <string.h>
 
 /* ******************************************************************
    This code should be used for unidirectional data transfer protocols 
@@ -41,13 +42,15 @@ struct pkt {
 /*- Your Definitions 
   ---------------------------------------------------------------------------*/
 
-#define MESSAGE_SIZE 20
-#define RTT 10//tempo per trasmissione+ricezione di ogni messaggio+ack
-struct pkt ultimo_pacchetto;
-struct pkt ultimo_ack;
-int STATO_A; //1 se aspetta ack 0 se NON aspetta ack
-int SEQNUMB;
-int ACK;//valore 0 o 1 in base all'alternanza
+#define MSG_SIZE 20
+#define RTT 10
+
+struct pkt last_pkt;
+struct pkt last_ack;
+
+int seq_num;	
+int state_A; 	//1 attending ack, 0 otherwise.
+int ack;		//0 - 1
 
 
 /* Please use the following values in your program */
@@ -83,32 +86,28 @@ struct node {
 };
 
 typedef struct node *list;
+
 list L;
 
 int is_empty(list *L) {
   return (L == NULL) || (*L == NULL);
 }
 
-void list_print(list L) { //utilizzata nel debug e commentata in seguito
-  if (L==NULL){	
+void list_print(list L) { 
+  if (L == NULL) {	
      printf("lista vuota, nessun elemento da stampare");
   }
-  while(L!=NULL) {
+  while(L != NULL) {
     printf("%s ",L->p.payload);
     L = L->next;
   }
   printf("\n");
 }
 
-list list_create() {
-	return NULL;
-}
-
-static struct node *node_alloc(struct pkt elem) {
+struct node* node_alloc(struct pkt e) {
 	struct node *tmp = (struct node *)malloc(sizeof(struct node));
-
 	if(tmp != NULL) {
-		tmp->p = elem;
+		tmp->p = e;
 		tmp->next = NULL;
 	}
 	else{
@@ -117,82 +116,68 @@ static struct node *node_alloc(struct pkt elem) {
 	return tmp;
 }
 
-static int node_insert(struct node *L, struct pkt elem) {
-	if(L == NULL) {
-		printf("lista non esiste, creazione elemento in testa\n");
-
-	} else {
-		struct node *tmp = node_alloc(elem);
-	
+int node_insert(struct node *L, struct pkt e) {
+	if(L != NULL) {
+		struct node *tmp = node_alloc(e);
 		if(tmp != NULL) {
 			tmp->next = L->next;
 			L->next = tmp;
 		}
 		return tmp == NULL;
+	} else {
+		printf("lista non esiste, creazione elemento in testa\n");
 	}
 }
 
-//inserisci in testa
-int head_insert(list *L, struct pkt elem) {
+int head_insert(list *L, struct pkt e) {
 	if(L == NULL) {
 		return 1;
 	} else {
-		struct node *tmp = node_alloc(elem);
-		
+		struct node *tmp = node_alloc(e);
 		if(tmp != NULL) {
 			tmp->next = *L;
-			*L        = tmp; 
+			*L = tmp; 
 		}
 		return tmp == NULL;
 	}
 } 
 
-//elimina in testa
-int head_delete(list *L) {
+int delete_head(list *L) {
 	if(is_empty(L)) {
-		return 1;
+		return 0;
 	} else {
 		struct node *tmp = *L;
-
 		*L = (*L)->next;
 		free(tmp);
-		return 0;
+		return 1;
 	}
 } 
 
-//inserisci in coda
-int tail_insert(list *L, struct pkt elem) {
+int tail_insert(list *L, struct pkt e) {
 	if(L == NULL) {
 		printf("lista non esiste\n");
 		return 1;
 	} else if(is_empty(L)) {
-		return head_insert(L,elem);
+		return head_insert(L,e);
 	} else	{
 		struct node *tmp = *L;
-
 		while(tmp->next != NULL)
 			tmp = tmp->next;
-		return node_insert(tmp,elem); 
+		return node_insert(tmp, e); 
 	}
 }
 
-
-int genera_checksum(struct pkt packet){
+int generate_checksum(struct pkt packet){
     int i;
     int sum = (packet.seqnum + packet.acknum);
-    for(i = 0; i < MESSAGE_SIZE; i++){
+    for(i = 0; i < MSG_SIZE; i++){
         sum += (int)packet.payload[i];
     }
     return sum;
 }
 
 int check_checksum(struct pkt packet){
-    int i;
-    int sum = (packet.seqnum + packet.acknum);
-    for(i = 0; i < MESSAGE_SIZE; i++){
-        sum += (int)packet.payload[i];
-    }
-    return (sum==packet.checksum);
+	return generate_checksum(packet) == packet.checksum;
 }
 
 /********* STUDENTS WRITE THE NEXT SIX ROUTINES *********/
@@ -202,25 +187,19 @@ void
 A_output (message)
   struct msg message;
 {
- if(STATO_A==1){
-	//printf("A è in attesa di ACK da parte di B ---- ACK corrente %d\n",ACK);
-	struct pkt inAttesa;
-        strcpy(inAttesa.payload,message.data);
-	//aggiungi messaggio alla lista di attesa
-	tail_insert(&L,inAttesa);
-	//printf("inserito in coda il messaggio: %s\n", inAttesa.payload);
-	list_print(L);
-  }else{
-    struct pkt packet;
-    strcpy(packet.payload,message.data);
-    packet.seqnum = SEQNUMB;
-    packet.acknum = ACK;
-    packet.checksum=genera_checksum(packet); // valore che B userà per controllare se il messaggio è corrotto
-    ultimo_pacchetto = packet; // per ritrasmetterlo in caso di perdita o corruzione
-    //printf("A sta inviando un messaggio: %s a B e si mette in attesa di un ACK \n", packet.payload);
-    tolayer3(A,packet);
-    starttimer(A,RTT);
-    STATO_A = 1;
+	struct pkt packet;
+	strcpy(packet.payload, message.data);
+	if(state_A) {
+		tail_insert(&L, packet);
+		list_print(L);
+	} else {
+		packet.seqnum = seq_num;
+		packet.acknum = ack;
+		packet.checksum=generate_checksum(packet); 
+		last_pkt = packet; 
+		tolayer3(A,packet);
+		starttimer(A,RTT);
+		state_A = 1;
   }
 }
 
@@ -229,41 +208,34 @@ void
 A_input(packet)
   struct pkt packet;
 {	
-//printf("A ha ricevuto un ACK da B ACK ricevuto = %d ACK corrente %d, messaggio ricevuto : %s \n",packet.acknum,ACK,packet.payload);
-  if(packet.acknum == ACK && check_checksum(packet)){
-    stoptimer(A);
-    ACK=SEQNUMB;
-    STATO_A=0;
-    //printf("ACK ricevuto %d,ACK corrente = %d\n",packet.acknum,ACK);
-	if(L!=NULL){//in lista d'attesa ci sono messaggi
-		struct pkt nuovoPkt=L->p;
-		head_delete(&L);
-		nuovoPkt.seqnum = SEQNUMB;
-        	nuovoPkt.acknum = ACK;
-        	nuovoPkt.checksum=genera_checksum(nuovoPkt);
-		//printf("invio primo messaggio della coda : %s\n",nuovoPkt.payload);
-		tolayer3(A,nuovoPkt);
-		ultimo_pacchetto=nuovoPkt;
-		starttimer(A,RTT);
-		STATO_A=1;
-	}else{
-    struct msg message;
-    strcpy(message.data,packet.payload);
-    printf("%s\n",message.data);
-    //tolayer5(message.data); //A manda il messaggio
-   }
-  }
+	if(packet.acknum == ack && check_checksum(packet)){
+		stoptimer(A);
+		ack = seq_num;
+		state_A = 0;
+		if(L != NULL) {
+			struct pkt new_pkt = L->p;
+			delete_head(&L);
+			new_pkt.seqnum = seq_num;
+		    new_pkt.acknum = ack;
+		    new_pkt.checksum = generate_checksum(new_pkt);
+			tolayer3(A, new_pkt);
+			last_pkt = new_pkt;
+			starttimer(A, RTT);
+			state_A = 1;
+		} else {
+			struct msg message;
+			strcpy(message.data, packet.payload);
+			printf("%s\n", message.data);
+	   }
+	}
 }
 
 /* called when A's timer goes off */
 void
 A_timerinterrupt (void)
 {
-  //RTT scaduto quindi rimandiamo ultimo_pacchetto
-  //printf("ACK non ricevuto, ritrasmissione pacchetto\n");
-  //printf("%s\n",ultimo_pacchetto.payload);
-  tolayer3(A,ultimo_pacchetto);
-  starttimer(A,RTT);
+	tolayer3(A,last_pkt);
+	starttimer(A,RTT);
 } 
 
 /* the following routine will be called once (only) before any other */
@@ -271,11 +243,11 @@ A_timerinterrupt (void)
 void
 A_init (void)
 {
-	 int numPacchetti = 100;
-  SEQNUMB = FIRST_SEQNO;
-  ACK = 0;
-  STATO_A = 0;
-  L = list_create();
+	int numPacchetti = 100;
+	seq_num = FIRST_SEQNO;
+	ack = 0;
+	state_A = 0;
+	L = NULL;
 } 
 
 /* called from layer 3, when a packet arrives for layer 4 at B*/
@@ -283,29 +255,18 @@ void
 B_input (packet)
   struct pkt packet;
 {
-//printf("B ha ricevuto un messaggio da A --------  ACK ricevuto = %d ACK corrente %d, %s\n",packet.acknum,ACK,packet.payload);
-  if(check_checksum(packet) && packet.acknum == ACK && packet.seqnum == SEQNUMB){
-    struct msg messaggio;
-    strcpy(messaggio.data,packet.payload);
+	if(check_checksum(packet) && packet.acknum == ack && packet.seqnum == seq_num){
+		struct msg messaggio;
+		struct pkt pkt_ack;
 
-	if(SEQNUMB==0){
-		SEQNUMB=1;	
-	}else{
-		SEQNUMB=0;	
-	}
-    struct pkt pacchetto_ack;
-        pacchetto_ack.acknum = ACK;
-	pacchetto_ack.seqnum = SEQNUMB;
-        pacchetto_ack.checksum = genera_checksum(pacchetto_ack);
-        ultimo_ack = pacchetto_ack;
-        //printf("B invia un ACK ad A\n");
-	//printf("messaggio:%s, pacchetto_ack: %s\n",messaggio.data,pacchetto_ack.payload);
-        tolayer5(messaggio.data);
-	printf("B invia ACK");
-        tolayer3(B,pacchetto_ack);
-
-  }else{
-    //printf("B ha ricevuto un pacchetto corrotto da A --------  ACK ricevuto = %d ACK corrente %d, messaggio:%s\n",packet.acknum,ACK,packet.payload);
+		strcpy(messaggio.data,packet.payload);
+		seq_num = seq_num == 0 ? 1 : 0;
+		pkt_ack.acknum = ack;
+		pkt_ack.seqnum = seq_num;
+		pkt_ack.checksum = generate_checksum(pkt_ack);
+		last_ack = pkt_ack;
+		tolayer5(messaggio.data);
+		tolayer3(B, pkt_ack);
   }
 }
 
